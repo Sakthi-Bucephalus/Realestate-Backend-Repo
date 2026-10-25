@@ -54,6 +54,43 @@ const FollowUpSchema = new mongoose.Schema(
   { _id: true, timestamps: true }
 );
 
+const CallLogSchema = new mongoose.Schema(
+  {
+    dialedAt: {
+      type: Date,
+      default: Date.now,
+    },
+    duration: {
+      type: Number,
+      default: 0,
+    },
+    outcome: {
+      type: String,
+      enum: ['Connected', 'Busy', 'No Answer', 'Left Voicemail', 'Wrong Number', 'Follow-up Scheduled'],
+      default: 'Connected',
+    },
+    notes: {
+      type: String,
+      default: '',
+    },
+    performedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true,
+    },
+  },
+  { _id: true, timestamps: true }
+);
+
+const FormAnswerSchema = new mongoose.Schema(
+  {
+    fieldName: { type: String, default: '' },
+    label: { type: String, default: '' },
+    value: { type: String, default: '' },
+  },
+  { _id: false }
+);
+
 const LeadSchema = new mongoose.Schema(
   {
     organizationId: {
@@ -164,6 +201,108 @@ const LeadSchema = new mongoose.Schema(
       type: String,
       default: '',
     },
+    // Meta (Facebook / Instagram) Lead Ads Integration Fields
+    metaLeadId: {
+      type: String,
+      trim: true,
+      index: true,
+      default: null,
+    },
+    metaPageId: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    metaPageName: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    metaFormId: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    metaFormName: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    metaCampaignId: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    metaCampaignName: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    metaAdSetId: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    metaAdSetName: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    metaAdId: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    metaAdName: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    metaPlatform: {
+      type: String,
+      trim: true,
+      default: 'fb', // fb | ig
+    },
+    formAnswers: {
+      type: [FormAnswerSchema],
+      default: [],
+    },
+    metaRawData: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
+    },
+    metaCreatedAt: {
+      type: Date,
+      default: null,
+    },
+    isNewLead: {
+      type: Boolean,
+      default: true,
+      index: true,
+    },
+    viewedAt: {
+      type: Date,
+      default: null,
+    },
+    viewedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    callLogs: {
+      type: [CallLogSchema],
+      default: [],
+    },
+    syncSource: {
+      type: String,
+      enum: ['WEBHOOK', 'MANUAL_IMPORT', 'MANUAL_ENTRY', 'WEBSITE', 'OTHER'],
+      default: 'MANUAL_ENTRY',
+    },
+    syncStatus: {
+      type: String,
+      enum: ['SUCCESS', 'PENDING', 'FAILED'],
+      default: 'SUCCESS',
+    },
     history: [LeadHistorySchema],
     tags: {
       type: [String],
@@ -179,5 +318,17 @@ LeadSchema.index({ organizationId: 1, leadCode: 1 }, { unique: true });
 LeadSchema.index({ organizationId: 1, status: 1, nextFollowUpDate: 1 });
 LeadSchema.index({ organizationId: 1, phone: 1 });
 LeadSchema.index({ organizationId: 1, name: 'text', notes: 'text', preferredLocation: 'text' });
+// Compound unique index for Meta Lead ID within tenant
+LeadSchema.index(
+  { organizationId: 1, metaLeadId: 1 },
+  {
+    unique: true,
+    sparse: true,
+    partialFilterExpression: { metaLeadId: { $type: 'string' } },
+  }
+);
+LeadSchema.index({ organizationId: 1, isNewLead: 1, createdAt: -1 });
+LeadSchema.index({ organizationId: 1, metaCampaignName: 1 });
+LeadSchema.index({ organizationId: 1, metaFormId: 1 });
 
 module.exports = mongoose.model('Lead', LeadSchema);

@@ -9,6 +9,8 @@ const requireAuth = async (req, res, next) => {
       token = req.headers.authorization.split(' ')[1];
     } else if (req.cookies && req.cookies.token) {
       token = req.cookies.token;
+    } else if (req.query && req.query.token) {
+      token = req.query.token;
     }
 
     if (!token) {

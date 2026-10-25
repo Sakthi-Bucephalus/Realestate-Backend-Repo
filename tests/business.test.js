@@ -1,3 +1,5 @@
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '../.env') });
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const request = require('supertest');

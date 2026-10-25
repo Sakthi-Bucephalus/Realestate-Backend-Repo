@@ -1,7 +1,12 @@
 const LEAD_STATUSES = {
   NEW: 'New',
-  CONTACTED: 'Contacted',
+  HOT: 'Hot',
+  WARM: 'Warm',
+  COLD: 'Cold',
   INTERESTED: 'Interested',
+  NOT_INTERESTED: 'Not Interested',
+  IN_PROGRESS: 'In Progress',
+  CONTACTED: 'Contacted',
   SITE_VISIT_SCHEDULED: 'Site Visit Scheduled',
   NEGOTIATION: 'Negotiation',
   CONVERTED: 'Converted',
@@ -16,6 +21,9 @@ const LEAD_PRIORITIES = {
 };
 
 const LEAD_SOURCES = [
+  'Meta Lead Ads',
+  'Facebook',
+  'Instagram',
   'Website',
   'Referral',
   'Walk-in',

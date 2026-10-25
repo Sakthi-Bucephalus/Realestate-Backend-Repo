@@ -18,6 +18,7 @@ const employeeRoutes = require('./routes/employeeRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
 const settingsRoutes = require('./routes/settingsRoutes');
 const reportRoutes = require('./routes/reportRoutes');
+const metaRoutes = require('./routes/metaRoutes');
 
 const app = express();
 
@@ -28,23 +29,23 @@ app.use(helmet({
 
 //// Local URL
 
-// app.use(cors({
-//   origin: true,
-//   credentials: true,
-//   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-//   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-// }));
+app.use(cors({
+  origin: true,
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+}));
 
 ///Local URL
 
 ///Live URL
 
-app.use(cors({
-  origin: 'http://rsv-realestate.s3-website-ap-southeast-2.amazonaws.com',
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-}));
+// app.use(cors({
+//   origin: 'http://rsv-realestate.s3-website-ap-southeast-2.amazonaws.com',
+//   credentials: true,
+//   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+//   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+// }));
 
 
 ///Live URL
@@ -94,6 +95,7 @@ app.use('/api/employees', employeeRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/reports', reportRoutes);
+app.use('/api/meta', metaRoutes);
 
 // 404 Handler for undefined API routes
 app.use('/api/*', (req, res) => {
