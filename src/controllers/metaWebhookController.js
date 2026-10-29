@@ -17,6 +17,7 @@ const verifyWebhook = (req, res) => {
 
   const expectedToken =
     process.env.META_WEBHOOK_VERIFY_TOKEN ||
+    process.env.FB_WEBHOOK_VERIFY_TOKEN ||
     'estateflow_meta_webhook_verify_token_secure_2026';
 
   console.log(`[MetaWebhook] Verification attempt received. Mode: ${mode}`);
@@ -25,6 +26,14 @@ const verifyWebhook = (req, res) => {
     console.log('[MetaWebhook] Verification successful. Responding with challenge.');
     // Must return challenge as plain text with 200 OK
     return res.status(200).send(challenge);
+  }
+
+  // Gracefully handle case if Facebook OAuth redirect was mistakenly sent to Webhook URL
+  if (req.query.code && !mode) {
+    console.warn('[MetaWebhook] Detected Facebook OAuth code sent to Webhook URL endpoint. Redirecting to frontend callback...');
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const queryParams = new URLSearchParams(req.query).toString();
+    return res.redirect(`${frontendUrl.replace(/\/+$/, '')}/connect-meta/callback?${queryParams}`);
   }
 
   console.warn('[MetaWebhook] Verification failed. Token mismatch or invalid mode.');
@@ -44,7 +53,8 @@ const handleWebhookEvent = async (req, res) => {
 
   // Optional signature verification if app secret is configured
   if (appSecret && signature) {
-    const isValid = verifyMetaSignature(req.body, signature, appSecret);
+    const rawPayload = req.rawBody || req.body;
+    const isValid = verifyMetaSignature(rawPayload, signature, appSecret);
     if (!isValid) {
       console.warn('[MetaWebhook] Signature verification failed for webhook delivery.');
       return res.status(401).json({ success: false, message: 'Invalid payload signature.' });

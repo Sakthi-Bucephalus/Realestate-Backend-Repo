@@ -23,8 +23,11 @@ const getConnectUrl = async (req, res, next) => {
       });
     }
 
-    const state = generateOAuthState(req.organizationId, req.user._id);
-    const authUrl = metaService.getOAuthUrl(state);
+    const customRedirectUri = req.query.redirectUri || req.query.redirect_uri || null;
+    const redirectUri = metaService.getRedirectUri(customRedirectUri);
+    const state = generateOAuthState(req.organizationId, req.user._id, redirectUri);
+    const authUrl = metaService.getOAuthUrl(state, redirectUri);
+    const webhookUrl = metaService.getWebhookUrl();
 
     return res.json({
       success: true,
@@ -32,6 +35,9 @@ const getConnectUrl = async (req, res, next) => {
       state,
       appId,
       graphVersion: metaService.getGraphApiVersion(),
+      redirectUri,
+      webhookUrl,
+      verifyToken: process.env.META_WEBHOOK_VERIFY_TOKEN || 'estateflow_meta_webhook_verify_token_secure_2026',
     });
   } catch (err) {
     next(err);
@@ -49,6 +55,8 @@ const handleOAuthCallback = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Authorization code is required' });
     }
 
+    let stateRedirectUri = '';
+
     // Verify CSRF state
     if (state) {
       const stateData = verifyOAuthState(state);
@@ -58,11 +66,19 @@ const handleOAuthCallback = async (req, res, next) => {
       if (String(stateData.organizationId) !== String(req.organizationId)) {
         return res.status(403).json({ success: false, message: 'OAuth state does not match your active organization session.' });
       }
+      stateRedirectUri = stateData.redirectUri;
     }
 
+    // Determine the exact redirect URI used in the dialog request:
+    // Priority:
+    // 1. stateRedirectUri (sealed inside the CSRF state during getConnectUrl)
+    // 2. process.env.META_REDIRECT_URI
+    // 3. client-sent redirectUri
+    const effectiveRedirectUri = stateRedirectUri || process.env.META_REDIRECT_URI || redirectUri || metaService.getRedirectUri();
+    console.log(`[MetaConnect] Exchanging OAuth code for tokens using redirect_uri: "${effectiveRedirectUri}"...`);
+
     // Exchange code for long-lived tokens
-    console.log('[MetaConnect] Exchanging OAuth code for tokens...');
-    const tokenResult = await metaService.exchangeCodeForTokens(code, redirectUri);
+    const tokenResult = await metaService.exchangeCodeForTokens(code, effectiveRedirectUri);
     const { accessToken, expiresAt, userProfile } = tokenResult;
 
     // Fetch user Pages
@@ -159,11 +175,72 @@ const handleOAuthCallback = async (req, res, next) => {
 };
 
 /**
+ * Handle GET OAuth redirect if Facebook redirects browser directly to backend callback
+ */
+const handleOAuthGetRedirect = async (req, res, next) => {
+  try {
+    const { code, state, error, error_description } = req.query;
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const callbackPath = '/connect-meta/callback';
+    const targetUrl = new URL(callbackPath, frontendUrl);
+
+    if (error) {
+      targetUrl.searchParams.set('error', error);
+      if (error_description) {
+        targetUrl.searchParams.set('error_description', error_description);
+      }
+      return res.redirect(targetUrl.toString());
+    }
+
+    if (code) {
+      targetUrl.searchParams.set('code', code);
+    }
+    if (state) {
+      targetUrl.searchParams.set('state', state);
+    }
+
+    return res.redirect(targetUrl.toString());
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * Get Meta Webhook & Facebook OAuth Redirect URI configuration details
+ */
+const getConnectionConfig = async (req, res, next) => {
+  try {
+    return res.json({
+      success: true,
+      data: {
+        appId: process.env.META_APP_ID || '',
+        graphVersion: metaService.getGraphApiVersion(),
+        webhookUrl: metaService.getWebhookUrl(),
+        verifyToken: process.env.META_WEBHOOK_VERIFY_TOKEN || 'estateflow_meta_webhook_verify_token_secure_2026',
+        redirectUri: metaService.getRedirectUri(),
+        frontendUrl: process.env.FRONTEND_URL || 'http://localhost:5173',
+        backendPublicUrl: process.env.BACKEND_PUBLIC_URL || `http://localhost:${process.env.PORT || 5000}`,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
  * 3. Get current Meta Connection details
  */
 const getConnection = async (req, res, next) => {
   try {
     const connection = await MetaConnection.findOne({ organizationId: req.organizationId });
+
+    const config = {
+      webhookUrl: metaService.getWebhookUrl(),
+      redirectUri: metaService.getRedirectUri(),
+      verifyToken: process.env.META_WEBHOOK_VERIFY_TOKEN || 'estateflow_meta_webhook_verify_token_secure_2026',
+      appId: process.env.META_APP_ID || '',
+      graphVersion: metaService.getGraphApiVersion(),
+    };
 
     if (!connection) {
       return res.json({
@@ -172,13 +249,17 @@ const getConnection = async (req, res, next) => {
           status: 'DISCONNECTED',
           healthStatus: 'UNCHECKED',
           selectedPages: [],
+          config,
         },
       });
     }
 
+    const data = sanitizeConnection(connection);
+    data.config = config;
+
     return res.json({
       success: true,
-      data: sanitizeConnection(connection),
+      data,
     });
   } catch (err) {
     next(err);
@@ -479,6 +560,8 @@ const sanitizeConnection = (connection) => {
 module.exports = {
   getConnectUrl,
   handleOAuthCallback,
+  handleOAuthGetRedirect,
+  getConnectionConfig,
   getConnection,
   refreshPagesAndForms,
   updateSelectedResources,

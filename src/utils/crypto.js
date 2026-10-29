@@ -71,9 +71,13 @@ const verifyMetaSignature = (rawPayload, signatureHeader, appSecret) => {
   }
 
   const receivedHash = parts[1];
+  const bodyBuffer = Buffer.isBuffer(rawPayload)
+    ? rawPayload
+    : Buffer.from(typeof rawPayload === 'string' ? rawPayload : JSON.stringify(rawPayload), 'utf8');
+
   const expectedHash = crypto
     .createHmac('sha256', appSecret)
-    .update(typeof rawPayload === 'string' ? rawPayload : JSON.stringify(rawPayload))
+    .update(bodyBuffer)
     .digest('hex');
 
   try {
@@ -89,10 +93,11 @@ const verifyMetaSignature = (rawPayload, signatureHeader, appSecret) => {
 };
 
 /**
- * Generate secure OAuth CSRF state token tied to organization
+ * Generate secure OAuth CSRF state token tied to organization & redirectUri
  */
-const generateOAuthState = (organizationId, userId) => {
-  const payload = `${organizationId}:${userId}:${Date.now()}:${crypto.randomBytes(8).toString('hex')}`;
+const generateOAuthState = (organizationId, userId, redirectUri = '') => {
+  const encodedRedirect = Buffer.from(redirectUri || '', 'utf8').toString('base64url');
+  const payload = `${organizationId}:${userId}:${Date.now()}:${crypto.randomBytes(8).toString('hex')}:${encodedRedirect}`;
   const hmac = crypto.createHmac('sha256', getMasterKey()).update(payload).digest('hex');
   return Buffer.from(`${payload}:${hmac}`).toString('base64url');
 };
@@ -104,24 +109,45 @@ const verifyOAuthState = (stateString) => {
   try {
     const decoded = Buffer.from(stateString, 'base64url').toString('utf8');
     const parts = decoded.split(':');
-    if (parts.length !== 5) {
-      return null;
-    }
-    const [orgId, userId, timestamp, salt, receivedHmac] = parts;
-    const payload = `${orgId}:${userId}:${timestamp}:${salt}`;
-    const expectedHmac = crypto.createHmac('sha256', getMasterKey()).update(payload).digest('hex');
 
-    if (receivedHmac !== expectedHmac) {
-      return null;
+    // 6 parts: orgId : userId : timestamp : salt : encodedRedirect : hmac
+    if (parts.length === 6) {
+      const [orgId, userId, timestamp, salt, encodedRedirect, receivedHmac] = parts;
+      const payload = `${orgId}:${userId}:${timestamp}:${salt}:${encodedRedirect}`;
+      const expectedHmac = crypto.createHmac('sha256', getMasterKey()).update(payload).digest('hex');
+
+      if (receivedHmac !== expectedHmac) {
+        return null;
+      }
+
+      const age = Date.now() - parseInt(timestamp, 10);
+      if (age > 30 * 60 * 1000) {
+        return null;
+      }
+
+      const redirectUri = encodedRedirect ? Buffer.from(encodedRedirect, 'base64url').toString('utf8') : '';
+      return { organizationId: orgId, userId, redirectUri };
     }
 
-    // Check expiration (max 30 minutes for OAuth state)
-    const age = Date.now() - parseInt(timestamp, 10);
-    if (age > 30 * 60 * 1000) {
-      return null;
+    // Legacy 5 parts: orgId : userId : timestamp : salt : hmac
+    if (parts.length === 5) {
+      const [orgId, userId, timestamp, salt, receivedHmac] = parts;
+      const payload = `${orgId}:${userId}:${timestamp}:${salt}`;
+      const expectedHmac = crypto.createHmac('sha256', getMasterKey()).update(payload).digest('hex');
+
+      if (receivedHmac !== expectedHmac) {
+        return null;
+      }
+
+      const age = Date.now() - parseInt(timestamp, 10);
+      if (age > 30 * 60 * 1000) {
+        return null;
+      }
+
+      return { organizationId: orgId, userId, redirectUri: '' };
     }
 
-    return { organizationId: orgId, userId };
+    return null;
   } catch (err) {
     return null;
   }

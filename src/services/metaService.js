@@ -7,15 +7,44 @@ const getGraphApiVersion = () => process.env.META_GRAPH_API_VERSION || 'v21.0';
 const getGraphApiBase = () => `https://graph.facebook.com/${getGraphApiVersion()}`;
 
 /**
- * Generate official Facebook OAuth Dialog URL
+ * Helper to resolve the configured Meta Webhook URL
+ * Used by Meta for subscription verification & leadgen event delivery
  */
-const getOAuthUrl = (state) => {
-  const appId = process.env.META_APP_ID;
-  const redirectUri = process.env.META_REDIRECT_URI || 'http://localhost:5173/connect-meta/callback';
-  const version = getGraphApiVersion();
+const getWebhookUrl = () => {
+  if (process.env.META_WEBHOOK_URL) return process.env.META_WEBHOOK_URL;
+  if (process.env.FB_WEBHOOK_URL) return process.env.FB_WEBHOOK_URL;
+  if (process.env.FACEBOOK_WEBHOOK_URL) return process.env.FACEBOOK_WEBHOOK_URL;
 
-  const scopes = [
-    'email',
+  const publicBase = process.env.BACKEND_PUBLIC_URL || `http://localhost:${process.env.PORT || 5000}`;
+  return `${publicBase.replace(/\/+$/, '')}/api/meta/webhook`;
+};
+
+/**
+ * Helper to resolve the configured Facebook OAuth Redirect URI
+ * Used by Facebook Login dialog to redirect back after user authorization
+ */
+const getRedirectUri = (customRedirectUri = null) => {
+  if (customRedirectUri) return customRedirectUri;
+  if (process.env.META_REDIRECT_URI) return process.env.META_REDIRECT_URI;
+  if (process.env.FB_REDIRECT_URI) return process.env.FB_REDIRECT_URI;
+  if (process.env.FACEBOOK_REDIRECT_URI) return process.env.FACEBOOK_REDIRECT_URI;
+  if (process.env.META_REDIRECT_URL) return process.env.META_REDIRECT_URL;
+  if (process.env.FACEBOOK_REDIRECT_URL) return process.env.FACEBOOK_REDIRECT_URL;
+
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  return `${frontendUrl.replace(/\/+$/, '')}/connect-meta/callback`;
+};
+
+/**
+ * Helper to get configured OAuth Scopes for Facebook Lead Ads
+ * By default requests official lead ads permissions without 'email'
+ * (Meta Business / Lead Ads apps reject personal 'email' scope in v21.0)
+ */
+const getOAuthScopes = () => {
+  if (process.env.META_SCOPES) {
+    return process.env.META_SCOPES.split(',').map((s) => s.trim()).filter(Boolean).join(',');
+  }
+  return [
     'public_profile',
     'pages_show_list',
     'pages_read_engagement',
@@ -23,6 +52,16 @@ const getOAuthUrl = (state) => {
     'leads_retrieval',
     'pages_manage_ads',
   ].join(',');
+};
+
+/**
+ * Generate official Facebook OAuth Dialog URL
+ */
+const getOAuthUrl = (state, customRedirectUri = null) => {
+  const appId = process.env.META_APP_ID;
+  const redirectUri = getRedirectUri(customRedirectUri);
+  const version = getGraphApiVersion();
+  const scopes = getOAuthScopes();
 
   const params = new URLSearchParams({
     client_id: appId || '',
@@ -41,7 +80,7 @@ const getOAuthUrl = (state) => {
 const exchangeCodeForTokens = async (code, customRedirectUri = null) => {
   const appId = process.env.META_APP_ID;
   const appSecret = process.env.META_APP_SECRET;
-  const redirectUri = customRedirectUri || process.env.META_REDIRECT_URI || 'http://localhost:5173/connect-meta/callback';
+  const redirectUri = getRedirectUri(customRedirectUri);
   const version = getGraphApiVersion();
 
   if (!appId || !appSecret) {
@@ -57,8 +96,37 @@ const exchangeCodeForTokens = async (code, customRedirectUri = null) => {
       code,
     }).toString();
 
-  const tokenRes = await fetch(tokenUrl);
-  const tokenData = await tokenRes.json();
+  let tokenRes = await fetch(tokenUrl);
+  let tokenData = await tokenRes.json();
+
+  // If redirect_uri mismatch occurred (error_subcode 36008), retry with candidate alternatives
+  if (tokenData.error?.error_subcode === 36008) {
+    const candidates = [
+      process.env.META_REDIRECT_URI,
+      `${(process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/+$/, '')}/connect-meta/callback`,
+      customRedirectUri,
+    ].filter((u) => u && u !== redirectUri);
+
+    for (const altUri of candidates) {
+      console.warn(`[MetaService] Retrying token exchange with alternative redirect_uri: "${altUri}"`);
+      const retryUrl = `https://graph.facebook.com/${version}/oauth/access_token?` +
+        new URLSearchParams({
+          client_id: appId,
+          client_secret: appSecret,
+          redirect_uri: altUri,
+          code,
+        }).toString();
+
+      const retryRes = await fetch(retryUrl);
+      const retryData = await retryRes.json();
+      if (retryRes.ok && retryData.access_token) {
+        tokenRes = retryRes;
+        tokenData = retryData;
+        console.log(`[MetaService] Retry succeeded with redirect_uri: "${altUri}"`);
+        break;
+      }
+    }
+  }
 
   if (!tokenRes.ok || tokenData.error) {
     const errorMsg = tokenData.error?.message || 'Failed to exchange authorization code for Meta access token';
@@ -106,7 +174,7 @@ const exchangeCodeForTokens = async (code, customRedirectUri = null) => {
  */
 const getUserProfile = async (userAccessToken) => {
   const version = getGraphApiVersion();
-  const res = await fetch(`https://graph.facebook.com/${version}/me?fields=id,name,email&access_token=${userAccessToken}`);
+  const res = await fetch(`https://graph.facebook.com/${version}/me?fields=id,name&access_token=${userAccessToken}`);
   const data = await res.json();
 
   if (!res.ok || data.error) {
@@ -444,6 +512,7 @@ const checkTokenHealth = async (userAccessToken) => {
 module.exports = {
   getGraphApiVersion,
   getOAuthUrl,
+  getOAuthScopes,
   exchangeCodeForTokens,
   getUserProfile,
   getUserPages,
@@ -454,4 +523,6 @@ module.exports = {
   getFormLeads,
   parseLeadData,
   checkTokenHealth,
+  getWebhookUrl,
+  getRedirectUri,
 };

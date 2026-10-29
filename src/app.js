@@ -19,8 +19,12 @@ const notificationRoutes = require('./routes/notificationRoutes');
 const settingsRoutes = require('./routes/settingsRoutes');
 const reportRoutes = require('./routes/reportRoutes');
 const metaRoutes = require('./routes/metaRoutes');
+const metaController = require('./controllers/metaController');
 
 const app = express();
+
+// Trust proxy for reverse proxies / tunnels (ngrok, AWS ALB, NGINX)
+app.set('trust proxy', 1);
 
 // Security Middlewares
 app.use(helmet({
@@ -55,8 +59,15 @@ if (process.env.NODE_ENV !== 'test') {
   app.use(morgan('dev'));
 }
 
-// Body Parsers
-app.use(express.json({ limit: '10mb' }));
+// Body Parsers (with raw body retention for Meta webhook signature verification)
+app.use(
+  express.json({
+    limit: '10mb',
+    verify: (req, res, buf) => {
+      req.rawBody = buf;
+    },
+  })
+);
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Global Rate Limiter
@@ -83,6 +94,7 @@ app.get('/api/health', (req, res) => {
 });
 
 // Mount Feature API Routes
+app.get('/connect-meta/callback', metaController.handleOAuthGetRedirect);
 app.use('/api/auth', authRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/leads', leadRoutes);

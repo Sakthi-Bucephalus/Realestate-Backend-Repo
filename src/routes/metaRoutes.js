@@ -9,9 +9,15 @@ const { requirePermission } = require('../middleware/rbac');
 router.get('/webhook', metaWebhookController.verifyWebhook);
 router.post('/webhook', metaWebhookController.handleWebhookEvent);
 
+// Public Facebook OAuth Redirect Fallback (if Facebook redirects browser to backend instead of SPA)
+router.get('/connect/callback', metaController.handleOAuthGetRedirect);
+router.get('/connect-meta/callback', metaController.handleOAuthGetRedirect);
+router.get('/callback', metaController.handleOAuthGetRedirect);
+
 // 2. Authenticated CRM Meta Integration Management Endpoints
 router.use(requireAuth);
 
+router.get('/config', requirePermission('leads.view'), metaController.getConnectionConfig);
 router.get('/connect/url', requirePermission('leads.edit'), metaController.getConnectUrl);
 router.post('/connect/callback', requirePermission('leads.edit'), metaController.handleOAuthCallback);
 router.get('/connection', requirePermission('leads.view'), metaController.getConnection);

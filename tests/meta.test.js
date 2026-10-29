@@ -7,7 +7,7 @@ const app = require('../src/app');
 const { connectDB, disconnectDB } = require('../src/config/db');
 const { setupTestDatabase } = require('./testHelper');
 const { encrypt, decrypt, verifyMetaSignature, generateOAuthState, verifyOAuthState } = require('../src/utils/crypto');
-const { parseLeadData } = require('../src/services/metaService');
+const { parseLeadData, getWebhookUrl, getRedirectUri } = require('../src/services/metaService');
 const Lead = require('../src/models/Lead');
 const MetaConnection = require('../src/models/MetaConnection');
 
@@ -271,7 +271,7 @@ describe('Meta Lead Ads & Tracking Module Integration Tests', () => {
       assert.ok(res.text.includes('Meta Lead Ads'));
     });
 
-    test('GET /api/meta/connection - should return sanitized connection without secrets', async () => {
+    test('GET /api/meta/connection - should return sanitized connection without secrets and with separated config', async () => {
       const res = await request(app)
         .get('/api/meta/connection')
         .set('Authorization', `Bearer ${token}`);
@@ -279,6 +279,54 @@ describe('Meta Lead Ads & Tracking Module Integration Tests', () => {
       assert.equal(res.status, 200);
       assert.equal(res.body.success, true);
       assert.equal(res.body.data.encryptedUserAccessToken, undefined);
+      assert.ok(res.body.data.config);
+      assert.ok(res.body.data.config.webhookUrl);
+      assert.ok(res.body.data.config.redirectUri);
+      assert.notEqual(res.body.data.config.webhookUrl, res.body.data.config.redirectUri);
+    });
+
+    test('Meta URLs separation - getWebhookUrl and getRedirectUri should be distinct', () => {
+      const whUrl = getWebhookUrl();
+      const rdUri = getRedirectUri();
+      assert.ok(whUrl.includes('/api/meta/webhook'));
+      assert.ok(rdUri.includes('callback'));
+      assert.notEqual(whUrl, rdUri, 'Webhook URL and OAuth Redirect URI must not be identical');
+    });
+
+    test('GET /api/meta/config - should return separated webhookUrl and redirectUri', async () => {
+      const res = await request(app)
+        .get('/api/meta/config')
+        .set('Authorization', `Bearer ${token}`);
+
+      assert.equal(res.status, 200);
+      assert.equal(res.body.success, true);
+      assert.ok(res.body.data.webhookUrl);
+      assert.ok(res.body.data.redirectUri);
+      assert.notEqual(res.body.data.webhookUrl, res.body.data.redirectUri);
+    });
+
+    test('GET /api/meta/connect/url - should return authUrl with separated redirectUri and include webhookUrl', async () => {
+      const res = await request(app)
+        .get('/api/meta/connect/url')
+        .set('Authorization', `Bearer ${token}`);
+
+      assert.equal(res.status, 200);
+      assert.equal(res.body.success, true);
+      assert.ok(res.body.authUrl);
+      assert.ok(res.body.redirectUri);
+      assert.ok(res.body.webhookUrl);
+      assert.notEqual(res.body.webhookUrl, res.body.redirectUri);
+      assert.ok(res.body.authUrl.includes(encodeURIComponent(res.body.redirectUri)));
+    });
+
+    test('GET /api/meta/connect/callback - should redirect browser to frontend callback', async () => {
+      const res = await request(app)
+        .get('/api/meta/connect/callback')
+        .query({ code: 'test_code_123', state: 'test_state_456' });
+
+      assert.equal(res.status, 302);
+      assert.ok(res.headers.location.includes('/connect-meta/callback'));
+      assert.ok(res.headers.location.includes('test_code_123'));
     });
   });
 });
