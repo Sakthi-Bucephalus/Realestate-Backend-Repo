@@ -5,11 +5,33 @@ const { PROPERTY_AVAILABILITY, AUDIT_ACTIONS } = require('../constants/statuses'
 const { logAudit } = require('../services/auditService');
 
 // Helper to generate unique property code
+// Helper to generate collision-proof property code
 const generatePropertyCode = async (organizationId, type) => {
-  const count = await Property.countDocuments({ organizationId });
-  const prefix = type === 'Residential Plot' ? 'PLT' : 'PROP';
-  const sequence = String(count + 1).padStart(4, '0');
-  return `EF-${prefix}-${sequence}`;
+  const prefix = type === 'Residential Plot' ? 'EF-PLT-' : 'EF-PROP-';
+  const latest = await Property.findOne({
+    organizationId,
+    propertyCode: new RegExp(`^${prefix}\\d+$`),
+  })
+    .sort({ propertyCode: -1 })
+    .select('propertyCode')
+    .lean();
+
+  let nextSeq = 1;
+  if (latest && latest.propertyCode) {
+    const parts = latest.propertyCode.split('-');
+    const currentSeq = parseInt(parts[parts.length - 1], 10);
+    if (!isNaN(currentSeq)) {
+      nextSeq = currentSeq + 1;
+    }
+  }
+
+  let candidate = `${prefix}${String(nextSeq).padStart(4, '0')}`;
+  while (await Property.exists({ organizationId, propertyCode: candidate })) {
+    nextSeq += 1;
+    candidate = `${prefix}${String(nextSeq).padStart(4, '0')}`;
+  }
+
+  return candidate;
 };
 
 // 1. Get properties (with filters, search, pagination)

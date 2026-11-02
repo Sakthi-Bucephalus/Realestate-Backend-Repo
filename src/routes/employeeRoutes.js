@@ -9,9 +9,42 @@ const { ROLES } = require('../constants/roles');
 router.use(requireAuth);
 router.use(requireModule(MODULES.EMPLOYEES));
 
+// List employees & users
 router.get('/', requirePermission('employees.view'), employeeController.getEmployees);
-router.post('/', requireRole(ROLES.OWNER, ROLES.ADMIN, ROLES.HR), employeeController.createEmployee);
-router.put('/:id', requireRole(ROLES.OWNER, ROLES.ADMIN, ROLES.HR), employeeController.updateEmployee);
-router.patch('/:id/status', requireRole(ROLES.OWNER, ROLES.ADMIN, ROLES.HR), employeeController.toggleAccountStatus);
+
+// Create user
+router.post(
+  '/',
+  requireRole(ROLES.MANAGING_DIRECTOR, ROLES.DIRECTOR, ROLES.OWNER, ROLES.ADMIN, ROLES.HR),
+  employeeController.createEmployee
+);
+
+// Update user details, role, or hierarchy
+router.put(
+  '/:id',
+  requireRole(ROLES.MANAGING_DIRECTOR, ROLES.DIRECTOR, ROLES.OWNER, ROLES.ADMIN, ROLES.HR),
+  employeeController.updateEmployee
+);
+
+// Toggle account lifecycle status (active / suspended / deactivated)
+router.patch(
+  '/:id/status',
+  requireRole(ROLES.MANAGING_DIRECTOR, ROLES.DIRECTOR, ROLES.OWNER, ROLES.ADMIN, ROLES.HR),
+  employeeController.toggleAccountStatus
+);
+
+// Administrative Password Reset
+router.post(
+  '/:id/reset-password',
+  requireRole(ROLES.MANAGING_DIRECTOR, ROLES.DIRECTOR, ROLES.OWNER, ROLES.ADMIN),
+  employeeController.adminResetPassword
+);
+
+// Director Delegation Management (MD Only)
+router.put(
+  '/:id/delegate',
+  requireRole(ROLES.MANAGING_DIRECTOR, ROLES.OWNER),
+  employeeController.delegateDirectorPermissions
+);
 
 module.exports = router;

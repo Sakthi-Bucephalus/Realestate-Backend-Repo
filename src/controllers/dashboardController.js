@@ -4,21 +4,28 @@ const Booking = require('../models/Booking');
 const Payment = require('../models/Payment');
 const SiteVisit = require('../models/SiteVisit');
 const Customer = require('../models/Customer');
-const { ROLES } = require('../constants/roles');
+const User = require('../models/User');
+const AuditLog = require('../models/AuditLog');
+const { ROLES, isManagingDirectorRole } = require('../constants/roles');
 const { LEAD_STATUSES, PROPERTY_AVAILABILITY, BOOKING_STATUSES } = require('../constants/statuses');
+const { buildDataScopeQuery } = require('../utils/dataScope');
 
 const getDashboardStats = async (req, res, next) => {
   try {
     const orgId = req.organizationId;
-    const isEmployee = req.user.role === ROLES.EMPLOYEE;
-    const employeeFilter = isEmployee ? { assignedTo: req.user._id } : {};
+    const isMD = isManagingDirectorRole(req.user.role);
+
+    // Build data-scoped query filters for the current role
+    const leadScopeQuery = buildDataScopeQuery(req.user, 'leads');
+    const visitScopeQuery = buildDataScopeQuery(req.user, 'site_visits');
+    const bookingScopeQuery = buildDataScopeQuery(req.user, 'bookings');
 
     const now = new Date();
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
-    // Run parallel aggregation pipelines
+    // Parallel aggregation pipelines
     const [
       totalLeads,
       newLeadsMonth,
@@ -31,46 +38,43 @@ const getDashboardStats = async (req, res, next) => {
       paymentStats,
       stageBreakdown,
       monthlySalesTrends,
+      mdUserStats,
+      recentAuditLogs,
     ] = await Promise.all([
-      // Total leads
-      Lead.countDocuments({ organizationId: orgId, ...employeeFilter }),
+      // Total leads (scoped)
+      Lead.countDocuments({ ...leadScopeQuery }),
 
-      // New inquiries this month
+      // New inquiries this month (scoped)
       Lead.countDocuments({
-        organizationId: orgId,
+        ...leadScopeQuery,
         createdAt: { $gte: startOfMonth },
-        ...employeeFilter,
       }),
 
-      // Converted leads
+      // Converted leads (scoped)
       Lead.countDocuments({
-        organizationId: orgId,
+        ...leadScopeQuery,
         status: LEAD_STATUSES.CONVERTED,
-        ...employeeFilter,
       }),
 
-      // Follow-ups due today
+      // Follow-ups due today (scoped)
       Lead.countDocuments({
-        organizationId: orgId,
+        ...leadScopeQuery,
         nextFollowUpDate: { $gte: startOfToday, $lte: endOfToday },
         status: { $nin: [LEAD_STATUSES.CONVERTED, LEAD_STATUSES.LOST] },
-        ...employeeFilter,
       }),
 
-      // Overdue follow-ups
+      // Overdue follow-ups (scoped)
       Lead.countDocuments({
-        organizationId: orgId,
+        ...leadScopeQuery,
         nextFollowUpDate: { $lt: startOfToday },
         status: { $nin: [LEAD_STATUSES.CONVERTED, LEAD_STATUSES.LOST] },
-        ...employeeFilter,
       }),
 
-      // Upcoming site visits in next 7 days
+      // Upcoming site visits in next 7 days (scoped)
       SiteVisit.countDocuments({
-        organizationId: orgId,
+        ...visitScopeQuery,
         scheduledTime: { $gte: startOfToday, $lte: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000) },
         status: 'Scheduled',
-        ...employeeFilter,
       }),
 
       // Property inventory breakdown
@@ -85,13 +89,12 @@ const getDashboardStats = async (req, res, next) => {
         },
       ]),
 
-      // Booking statistics
+      // Booking statistics (scoped)
       Booking.aggregate([
         {
           $match: {
-            organizationId: orgId,
+            ...bookingScopeQuery,
             status: { $ne: BOOKING_STATUSES.CANCELLED },
-            ...(isEmployee ? { assignedTo: req.user._id } : {}),
           },
         },
         {
@@ -122,9 +125,9 @@ const getDashboardStats = async (req, res, next) => {
         },
       ]),
 
-      // Lead stage breakdown for pipeline chart
+      // Lead stage breakdown for pipeline chart (scoped)
       Lead.aggregate([
-        { $match: { organizationId: orgId, ...employeeFilter } },
+        { $match: { ...leadScopeQuery } },
         { $group: { _id: '$status', count: { $sum: 1 } } },
       ]),
 
@@ -132,7 +135,7 @@ const getDashboardStats = async (req, res, next) => {
       Booking.aggregate([
         {
           $match: {
-            organizationId: orgId,
+            ...bookingScopeQuery,
             status: { $in: [BOOKING_STATUSES.CONFIRMED, BOOKING_STATUSES.COMPLETED] },
             bookingDate: { $gte: new Date(now.getFullYear(), now.getMonth() - 5, 1) },
           },
@@ -149,6 +152,26 @@ const getDashboardStats = async (req, res, next) => {
         },
         { $sort: { '_id.year': 1, '_id.month': 1 } },
       ]),
+
+      // MD Organization-Wide User Stats (if MD or Director)
+      (isMD || req.user.role === ROLES.DIRECTOR)
+        ? Promise.all([
+            User.countDocuments({ organizationId: orgId }),
+            User.countDocuments({ organizationId: orgId, isActive: true }),
+            User.aggregate([
+              { $match: { organizationId: orgId } },
+              { $group: { _id: '$role', count: { $sum: 1 } } },
+            ]),
+          ])
+        : Promise.resolve(null),
+
+      // MD Recent Administrative Activities (if MD or Director)
+      (isMD || req.user.role === ROLES.DIRECTOR)
+        ? AuditLog.find({ organizationId: orgId })
+            .sort({ createdAt: -1 })
+            .limit(6)
+            .lean()
+        : Promise.resolve([]),
     ]);
 
     // Format property inventory breakdown
@@ -188,9 +211,22 @@ const getDashboardStats = async (req, res, next) => {
       });
     }
 
+    // Role-wise user statistics for MD
+    let userManagementKpis = null;
+    if (mdUserStats) {
+      const [totalUsers, activeUsers, roleAgg] = mdUserStats;
+      userManagementKpis = {
+        totalUsers,
+        activeUsers,
+        roleCounts: Object.fromEntries(roleAgg.map((r) => [r._id, r.count])),
+      };
+    }
+
     return res.json({
       success: true,
       data: {
+        role: req.user.role,
+        isMD,
         kpis: {
           totalLeads,
           newLeadsMonth,
@@ -208,6 +244,8 @@ const getDashboardStats = async (req, res, next) => {
         inventory,
         stageBreakdown: Object.fromEntries(stageBreakdown.map((s) => [s._id, s.count])),
         salesTrends: formattedTrends,
+        userManagementKpis,
+        recentActivities: recentAuditLogs || [],
       },
     });
   } catch (err) {

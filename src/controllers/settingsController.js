@@ -2,7 +2,7 @@ const Organization = require('../models/Organization');
 const RolePermission = require('../models/RolePermission');
 const AuditLog = require('../models/AuditLog');
 const { MODULE_LIST } = require('../constants/modules');
-const { ROLE_LIST, ROLES } = require('../constants/roles');
+const { ROLE_LIST, ROLES, isManagingDirectorRole } = require('../constants/roles');
 const { DEFAULT_ROLE_PERMISSIONS } = require('../constants/permissions');
 const { invalidateRolePermissionsCache } = require('../middleware/rbac');
 const { sendEmail } = require('../services/emailService');
@@ -254,10 +254,10 @@ const updateRolePermissions = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Valid role is required.' });
     }
 
-    if (role === ROLES.OWNER) {
+    if (isManagingDirectorRole(role)) {
       return res.status(400).json({
         success: false,
-        message: 'Owner role permissions are system-defined and cannot be restricted.',
+        message: 'Managing Director role permissions are system-protected and cannot be restricted.',
       });
     }
 

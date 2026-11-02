@@ -5,12 +5,34 @@ const Payment = require('../models/Payment');
 const Lead = require('../models/Lead');
 const { logAudit } = require('../services/auditService');
 
-// Helper to generate customer code
+// Helper to generate collision-proof customer code
 const generateCustomerCode = async (organizationId) => {
-  const count = await Customer.countDocuments({ organizationId });
   const year = new Date().getFullYear();
-  const sequence = String(count + 1).padStart(4, '0');
-  return `EF-CUST-${year}-${sequence}`;
+  const prefix = `EF-CUST-${year}-`;
+  const latest = await Customer.findOne({
+    organizationId,
+    customerCode: new RegExp(`^${prefix}\\d+$`),
+  })
+    .sort({ customerCode: -1 })
+    .select('customerCode')
+    .lean();
+
+  let nextSeq = 1;
+  if (latest && latest.customerCode) {
+    const parts = latest.customerCode.split('-');
+    const currentSeq = parseInt(parts[parts.length - 1], 10);
+    if (!isNaN(currentSeq)) {
+      nextSeq = currentSeq + 1;
+    }
+  }
+
+  let candidate = `${prefix}${String(nextSeq).padStart(4, '0')}`;
+  while (await Customer.exists({ organizationId, customerCode: candidate })) {
+    nextSeq += 1;
+    candidate = `${prefix}${String(nextSeq).padStart(4, '0')}`;
+  }
+
+  return candidate;
 };
 
 // 1. Get all customers

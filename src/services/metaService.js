@@ -422,8 +422,11 @@ const parseLeadData = (rawLead) => {
   if (!name && (firstName || lastName)) {
     name = `${firstName} ${lastName}`.trim();
   }
+  const rawId = rawLead.id || rawLead.leadgen_id || rawLead.lead_id || null;
+  const metaLeadId = rawId ? String(rawId).trim() : null;
+
   if (!name) {
-    name = `Meta Lead #${rawLead.id ? rawLead.id.slice(-6) : Math.floor(1000 + Math.random() * 9000)}`;
+    name = `Meta Lead #${metaLeadId ? metaLeadId.slice(-6) : Math.floor(1000 + Math.random() * 9000)}`;
   }
 
   // Fallback phone if missing from custom form
@@ -432,7 +435,7 @@ const parseLeadData = (rawLead) => {
   }
 
   return {
-    metaLeadId: rawLead.id,
+    metaLeadId,
     name,
     phone,
     email,

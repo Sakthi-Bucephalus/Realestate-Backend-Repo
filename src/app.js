@@ -33,23 +33,23 @@ app.use(helmet({
 
 //// Local URL
 
-// app.use(cors({
-//   origin: true,
-//   credentials: true,
-//   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-//   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-// }));
+app.use(cors({
+  origin: true,
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+}));
 
 ///Local URL
 
 ///Live URL
 
-app.use(cors({
-  origin: 'http://rsv-realestate.s3-website-ap-southeast-2.amazonaws.com',
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-}));
+// app.use(cors({
+//   origin: 'http://rsv-realestate.s3-website-ap-southeast-2.amazonaws.com',
+//   credentials: true,
+//   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+//   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+// }));
 
 
 ///Live URL

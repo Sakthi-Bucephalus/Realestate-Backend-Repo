@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const { ROLES, ROLE_LIST } = require('../constants/roles');
+const { ACCOUNT_STATUSES } = require('../constants/statuses');
 
 const UserSchema = new mongoose.Schema(
   {
@@ -116,6 +117,62 @@ const UserSchema = new mongoose.Schema(
     customPermissions: {
       type: [String],
       default: [],
+    },
+    // Organizational Hierarchy & Structure
+    zone: {
+      type: String,
+      trim: true,
+      default: '',
+      index: true,
+    },
+    team: {
+      type: String,
+      trim: true,
+      default: '',
+      index: true,
+    },
+    reportingTo: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+      index: true,
+    },
+    accountStatus: {
+      type: String,
+      enum: Object.values(ACCOUNT_STATUSES),
+      default: ACCOUNT_STATUSES.ACTIVE,
+      index: true,
+    },
+    // Director Delegation Configuration (MD can delegate specific scopes to Directors)
+    delegatedPermissions: {
+      canManageRoles: {
+        type: [String],
+        default: [],
+      },
+      allowedModules: {
+        type: [String],
+        default: [],
+      },
+      managedZones: {
+        type: [String],
+        default: [],
+      },
+      managedTeams: {
+        type: [String],
+        default: [],
+      },
+      canApproveBookings: {
+        type: Boolean,
+        default: false,
+      },
+      canApprovePayments: {
+        type: Boolean,
+        default: false,
+      },
+      canExportData: {
+        type: Boolean,
+        default: false,
+      },
     },
   },
   {

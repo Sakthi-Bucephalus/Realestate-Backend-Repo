@@ -1,17 +1,40 @@
 const Lead = require('../models/Lead');
 const Customer = require('../models/Customer');
 const User = require('../models/User');
-const { ROLES } = require('../constants/roles');
+const { ROLES, isManagingDirectorRole } = require('../constants/roles');
 const { LEAD_STATUSES, AUDIT_ACTIONS } = require('../constants/statuses');
 const { logAudit } = require('../services/auditService');
 const { broadcastToOrganization, handleSseConnection } = require('../services/realtimeService');
 
-// Helper to generate unique lead code
+// Helper to generate collision-proof sequential lead code within tenant organization
 const generateLeadCode = async (organizationId) => {
-  const count = await Lead.countDocuments({ organizationId });
   const year = new Date().getFullYear();
-  const sequence = String(count + 1).padStart(4, '0');
-  return `EF-LD-${year}-${sequence}`;
+  const prefix = `EF-LD-${year}-`;
+
+  const latestLead = await Lead.findOne({
+    organizationId,
+    leadCode: new RegExp(`^${prefix}\\d+$`),
+  })
+    .sort({ leadCode: -1 })
+    .select('leadCode')
+    .lean();
+
+  let nextSeq = 1;
+  if (latestLead && latestLead.leadCode) {
+    const parts = latestLead.leadCode.split('-');
+    const currentSeq = parseInt(parts[parts.length - 1], 10);
+    if (!isNaN(currentSeq)) {
+      nextSeq = currentSeq + 1;
+    }
+  }
+
+  let candidate = `${prefix}${String(nextSeq).padStart(4, '0')}`;
+  while (await Lead.exists({ organizationId, leadCode: candidate })) {
+    nextSeq += 1;
+    candidate = `${prefix}${String(nextSeq).padStart(4, '0')}`;
+  }
+
+  return candidate;
 };
 
 // 1. Get all leads (Paginated, Filtered, Searched)
@@ -40,9 +63,13 @@ const getLeads = async (req, res, next) => {
 
     const query = { organizationId: req.organizationId };
 
-    // Record-level permission scoping: Employee role sees only assigned leads
-    if (req.user.role === ROLES.EMPLOYEE) {
-      query.assignedTo = req.user._id;
+    // Record-level permission scoping:
+    if (!isManagingDirectorRole(req.user.role)) {
+      if ([ROLES.EMPLOYEE, ROLES.MEDIATOR, ROLES.REFERRALS].includes(req.user.role)) {
+        query.assignedTo = req.user._id;
+      } else if (assignedTo) {
+        query.assignedTo = assignedTo;
+      }
     } else if (assignedTo) {
       query.assignedTo = assignedTo;
     }
@@ -301,7 +328,7 @@ const updateLead = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Lead not found' });
     }
 
-    if (req.user.role === ROLES.EMPLOYEE && String(lead.assignedTo) !== String(req.user._id)) {
+    if ([ROLES.EMPLOYEE, ROLES.MEDIATOR, ROLES.REFERRALS].includes(req.user.role) && String(lead.assignedTo) !== String(req.user._id)) {
       return res.status(403).json({ success: false, message: 'Not authorized to update this lead.' });
     }
 

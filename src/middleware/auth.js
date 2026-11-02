@@ -31,11 +31,23 @@ const requireAuth = async (req, res, next) => {
       });
     }
 
-    if (!user.isActive) {
+    if (user.accountStatus === 'pending_verification' || (!user.isEmailVerified && user.accountStatus !== 'active')) {
       return res.status(403).json({
         success: false,
-        message: 'Your account has been deactivated. Please contact your organization administrator.',
-        reason: user.statusChangeReason || 'Account deactivated',
+        message: 'Account pending email verification. Please verify your OTP to access features.',
+        accountStatus: user.accountStatus,
+      });
+    }
+
+    if (!user.isActive || user.accountStatus === 'suspended' || user.accountStatus === 'deactivated') {
+      const isSuspended = user.accountStatus === 'suspended';
+      return res.status(403).json({
+        success: false,
+        message: isSuspended
+          ? 'Your account has been suspended. Please contact the Managing Director.'
+          : 'Your account has been deactivated. Please contact your organization administrator.',
+        accountStatus: user.accountStatus,
+        reason: user.statusChangeReason || (isSuspended ? 'Account suspended' : 'Account deactivated'),
       });
     }
 

@@ -13,10 +13,17 @@ const errorHandler = (err, req, res, next) => {
 
   // Mongoose duplicate key error (code 11000)
   if (err.code === 11000) {
-    const field = Object.keys(err.keyValue)[0];
+    const keys = err.keyValue ? Object.keys(err.keyValue) : [];
+    // For compound indexes partitioned by organizationId, reveal the actual domain field
+    const nonOrgKeys = keys.filter((k) => k !== 'organizationId');
+    const field = nonOrgKeys.length > 0 ? nonOrgKeys.join(', ') : (keys[0] || 'record');
+    const duplicateVal = nonOrgKeys.length > 0 ? err.keyValue[nonOrgKeys[0]] : err.keyValue?.[keys[0]];
+
     return res.status(409).json({
       success: false,
-      message: `Duplicate entry: A record with this ${field} already exists.`,
+      message: `Duplicate entry: A record with this ${field} ("${duplicateVal || ''}") already exists.`,
+      field,
+      keyValue: err.keyValue,
     });
   }
 

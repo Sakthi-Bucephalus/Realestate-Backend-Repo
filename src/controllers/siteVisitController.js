@@ -2,7 +2,7 @@ const SiteVisit = require('../models/SiteVisit');
 const Lead = require('../models/Lead');
 const Property = require('../models/Property');
 const { SITE_VISIT_STATUSES, AUDIT_ACTIONS } = require('../constants/statuses');
-const { ROLES } = require('../constants/roles');
+const { ROLES, isManagingDirectorRole } = require('../constants/roles');
 const { logAudit } = require('../services/auditService');
 
 // Helper to generate visit code
@@ -29,8 +29,12 @@ const getSiteVisits = async (req, res, next) => {
 
     const query = { organizationId: req.organizationId };
 
-    if (req.user.role === ROLES.EMPLOYEE) {
-      query.assignedTo = req.user._id;
+    if (!isManagingDirectorRole(req.user.role)) {
+      if ([ROLES.EMPLOYEE, ROLES.MEDIATOR, ROLES.REFERRALS].includes(req.user.role)) {
+        query.assignedTo = req.user._id;
+      } else if (assignedTo) {
+        query.assignedTo = assignedTo;
+      }
     } else if (assignedTo) {
       query.assignedTo = assignedTo;
     }

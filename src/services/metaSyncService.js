@@ -9,13 +9,38 @@ const metaService = require('./metaService');
 const { broadcastToOrganization } = require('./realtimeService');
 
 /**
- * Helper to generate sequential lead code
+ * Collision-proof sequential lead code generator within tenant organization
  */
 const generateLeadCode = async (organizationId) => {
-  const count = await Lead.countDocuments({ organizationId });
   const year = new Date().getFullYear();
-  const sequence = String(count + 1).padStart(4, '0');
-  return `EF-LD-${year}-${sequence}`;
+  const prefix = `EF-LD-${year}-`;
+
+  // Find the lead with the highest sequence number for this year and org
+  const latestLead = await Lead.findOne({
+    organizationId,
+    leadCode: new RegExp(`^${prefix}\\d+$`),
+  })
+    .sort({ leadCode: -1 })
+    .select('leadCode')
+    .lean();
+
+  let nextSeq = 1;
+  if (latestLead && latestLead.leadCode) {
+    const parts = latestLead.leadCode.split('-');
+    const currentSeq = parseInt(parts[parts.length - 1], 10);
+    if (!isNaN(currentSeq)) {
+      nextSeq = currentSeq + 1;
+    }
+  }
+
+  // Ensure collision safety in case of deleted gaps or race conditions
+  let candidate = `${prefix}${String(nextSeq).padStart(4, '0')}`;
+  while (await Lead.exists({ organizationId, leadCode: candidate })) {
+    nextSeq += 1;
+    candidate = `${prefix}${String(nextSeq).padStart(4, '0')}`;
+  }
+
+  return candidate;
 };
 
 /**
@@ -104,10 +129,19 @@ const processWebhookLeadgenEntry = async ({ pageId, formId, leadgenId, createdTi
     parsed.metaFormName = formName || 'Lead Ad Form';
 
     // 6. Check if lead already exists in CRM by metaLeadId or phone
+    const targetMetaLeadId = parsed.metaLeadId ? String(parsed.metaLeadId).trim() : String(leadgenId).trim();
+
     let lead = await Lead.findOne({
       organizationId: connection.organizationId,
-      metaLeadId: leadgenId,
+      metaLeadId: targetMetaLeadId,
     });
+
+    if (!lead && parsed.phone && parsed.phone !== 'N/A') {
+      lead = await Lead.findOne({
+        organizationId: connection.organizationId,
+        phone: parsed.phone,
+      });
+    }
 
     let isNewlyCreated = false;
 
@@ -132,21 +166,22 @@ const processWebhookLeadgenEntry = async ({ pageId, formId, leadgenId, createdTi
 
       const leadCode = await generateLeadCode(connection.organizationId);
 
-      lead = await Lead.create({
-        organizationId: connection.organizationId,
-        leadCode,
-        name: parsed.name,
-        phone: parsed.phone,
-        email: parsed.email,
-        preferredLocation: parsed.preferredLocation,
-        preferredPropertyType: parsed.preferredPropertyType,
-        budgetMin: parsed.budgetMin,
-        budgetMax: parsed.budgetMax,
-        source: 'Meta Lead Ads',
-        priority: 'High',
-        status: 'New',
-        assignedTo: defaultAssignee,
-        metaLeadId: parsed.metaLeadId,
+      try {
+        lead = await Lead.create({
+          organizationId: connection.organizationId,
+          leadCode,
+          name: parsed.name,
+          phone: parsed.phone,
+          email: parsed.email,
+          preferredLocation: parsed.preferredLocation,
+          preferredPropertyType: parsed.preferredPropertyType,
+          budgetMin: parsed.budgetMin,
+          budgetMax: parsed.budgetMax,
+          source: 'Meta Lead Ads',
+          priority: 'High',
+          status: 'New',
+          assignedTo: defaultAssignee,
+          metaLeadId: targetMetaLeadId,
         metaPageId: parsed.metaPageId,
         metaPageName: parsed.metaPageName,
         metaFormId: parsed.metaFormId,
@@ -173,11 +208,29 @@ const processWebhookLeadgenEntry = async ({ pageId, formId, leadgenId, createdTi
             timestamp: new Date(),
           },
         ],
-      });
+        });
 
-      isNewlyCreated = true;
+        isNewlyCreated = true;
+      } catch (createErr) {
+        if (createErr.code === 11000) {
+          console.warn(`[MetaWebhook] Handled duplicate key for lead ${targetMetaLeadId}:`, createErr.keyValue || createErr.message);
+          lead = await Lead.findOne({
+            organizationId: connection.organizationId,
+            metaLeadId: targetMetaLeadId,
+          });
+          if (lead) {
+            lead.metaCampaignName = parsed.metaCampaignName || lead.metaCampaignName;
+            lead.metaAdName = parsed.metaAdName || lead.metaAdName;
+            lead.formAnswers = parsed.formAnswers.length > 0 ? parsed.formAnswers : lead.formAnswers;
+            await lead.save();
+          }
+        } else {
+          throw createErr;
+        }
+      }
 
-      // 7. Dispatch in-app notification to assigned user and admins
+      if (isNewlyCreated && lead) {
+        // 7. Dispatch in-app notification to assigned user and admins
       const notifyRecipients = await User.find({
         organizationId: connection.organizationId,
         $or: [{ _id: defaultAssignee }, { role: { $in: [ROLES.OWNER, ROLES.ADMIN] } }],
@@ -200,7 +253,8 @@ const processWebhookLeadgenEntry = async ({ pageId, formId, leadgenId, createdTi
         });
       }
 
-      console.log(`[MetaSync] Successfully created Lead ${lead.leadCode} (${lead.name})`);
+        console.log(`[MetaSync] Successfully created Lead ${lead.leadCode} (${lead.name})`);
+      }
     } else {
       // Update existing record with latest campaign / form answers
       lead.metaCampaignName = parsed.metaCampaignName || lead.metaCampaignName;
@@ -302,63 +356,124 @@ const syncFormLeads = async (organizationId, formId, limit = 50) => {
   let existingUpdated = 0;
 
   for (const rawLead of rawLeads) {
-    const parsed = metaService.parseLeadData(rawLead);
-    parsed.metaPageId = targetPage.pageId;
-    parsed.metaPageName = targetPage.pageName;
-    parsed.metaFormName = formMeta?.formName || 'Lead Form';
+    try {
+      const parsed = metaService.parseLeadData(rawLead);
+      parsed.metaPageId = targetPage.pageId;
+      parsed.metaPageName = targetPage.pageName;
+      parsed.metaFormName = formMeta?.formName || 'Lead Form';
 
-    let lead = await Lead.findOne({
-      organizationId,
-      metaLeadId: parsed.metaLeadId,
-    });
+      const leadIdStr = parsed.metaLeadId ? String(parsed.metaLeadId).trim() : null;
 
-    if (!lead) {
-      const leadCode = await generateLeadCode(organizationId);
-      lead = await Lead.create({
-        organizationId,
-        leadCode,
-        name: parsed.name,
-        phone: parsed.phone,
-        email: parsed.email,
-        preferredLocation: parsed.preferredLocation,
-        preferredPropertyType: parsed.preferredPropertyType,
-        budgetMin: parsed.budgetMin,
-        budgetMax: parsed.budgetMax,
-        source: 'Meta Lead Ads',
-        priority: 'High',
-        status: 'New',
-        assignedTo: connection.connectedBy,
-        metaLeadId: parsed.metaLeadId,
-        metaPageId: parsed.metaPageId,
-        metaPageName: parsed.metaPageName,
-        metaFormId: parsed.metaFormId || formId,
-        metaFormName: parsed.metaFormName,
-        metaCampaignId: parsed.metaCampaignId,
-        metaCampaignName: parsed.metaCampaignName,
-        metaAdSetId: parsed.metaAdSetId,
-        metaAdSetName: parsed.metaAdSetName,
-        metaAdId: parsed.metaAdId,
-        metaAdName: parsed.metaAdName,
-        metaPlatform: parsed.metaPlatform,
-        formAnswers: parsed.formAnswers,
-        metaRawData: parsed.metaRawData,
-        metaCreatedAt: parsed.metaCreatedAt,
-        isNewLead: true,
-        syncSource: 'MANUAL_IMPORT',
-        syncStatus: 'SUCCESS',
-        history: [
-          {
-            action: 'Lead Imported from Meta',
-            note: `Initial import from form "${parsed.metaFormName}"`,
-            performedBy: connection.connectedBy,
-            newStatus: 'New',
-            timestamp: new Date(),
-          },
-        ],
-      });
-      newlyCreated += 1;
-    } else {
-      existingUpdated += 1;
+      // 1. Check if lead already exists in CRM by metaLeadId
+      let lead = null;
+      if (leadIdStr) {
+        lead = await Lead.findOne({
+          organizationId,
+          metaLeadId: leadIdStr,
+        });
+      }
+
+      // If not found by metaLeadId, also check by phone within tenant if phone is valid
+      if (!lead && parsed.phone && parsed.phone !== 'N/A') {
+        lead = await Lead.findOne({
+          organizationId,
+          phone: parsed.phone,
+        });
+      }
+
+      if (!lead) {
+        let createdLead = null;
+        let attempts = 0;
+
+        // Try creating lead; if leadCode or metaLeadId collision happens, handle gracefully
+        while (!createdLead && attempts < 3) {
+          attempts += 1;
+          const leadCode = await generateLeadCode(organizationId);
+
+          try {
+            createdLead = await Lead.create({
+              organizationId,
+              leadCode,
+              name: parsed.name,
+              phone: parsed.phone,
+              email: parsed.email,
+              preferredLocation: parsed.preferredLocation,
+              preferredPropertyType: parsed.preferredPropertyType,
+              budgetMin: parsed.budgetMin,
+              budgetMax: parsed.budgetMax,
+              source: 'Meta Lead Ads',
+              priority: 'High',
+              status: 'New',
+              assignedTo: connection.connectedBy,
+              metaLeadId: leadIdStr,
+              metaPageId: parsed.metaPageId,
+              metaPageName: parsed.metaPageName,
+              metaFormId: parsed.metaFormId || formId,
+              metaFormName: parsed.metaFormName,
+              metaCampaignId: parsed.metaCampaignId,
+              metaCampaignName: parsed.metaCampaignName,
+              metaAdSetId: parsed.metaAdSetId,
+              metaAdSetName: parsed.metaAdSetName,
+              metaAdId: parsed.metaAdId,
+              metaAdName: parsed.metaAdName,
+              metaPlatform: parsed.metaPlatform,
+              formAnswers: parsed.formAnswers,
+              metaRawData: parsed.metaRawData,
+              metaCreatedAt: parsed.metaCreatedAt,
+              isNewLead: true,
+              syncSource: 'MANUAL_IMPORT',
+              syncStatus: 'SUCCESS',
+              history: [
+                {
+                  action: 'Lead Imported from Meta',
+                  note: `Initial import from form "${parsed.metaFormName}"`,
+                  performedBy: connection.connectedBy,
+                  newStatus: 'New',
+                  timestamp: new Date(),
+                },
+              ],
+            });
+            newlyCreated += 1;
+          } catch (createErr) {
+            if (createErr.code === 11000) {
+              console.warn(`[MetaSync] Duplicate key detected on attempt ${attempts}:`, createErr.keyValue || createErr.message);
+
+              // Check if another webhook or process already created the lead with this metaLeadId or phone
+              let existingCollidedLead = null;
+              if (leadIdStr) {
+                existingCollidedLead = await Lead.findOne({ organizationId, metaLeadId: leadIdStr });
+              }
+              if (!existingCollidedLead && parsed.phone && parsed.phone !== 'N/A') {
+                existingCollidedLead = await Lead.findOne({ organizationId, phone: parsed.phone });
+              }
+
+              if (existingCollidedLead) {
+                existingCollidedLead.formAnswers = parsed.formAnswers.length > 0 ? parsed.formAnswers : existingCollidedLead.formAnswers;
+                existingCollidedLead.metaCampaignName = parsed.metaCampaignName || existingCollidedLead.metaCampaignName;
+                existingCollidedLead.metaAdName = parsed.metaAdName || existingCollidedLead.metaAdName;
+                await existingCollidedLead.save();
+                existingUpdated += 1;
+                break;
+              }
+              // If collision was on leadCode, next iteration of while loop will pick fresh leadCode
+            } else {
+              throw createErr;
+            }
+          }
+        }
+      } else {
+        // Update existing lead record with fresh formAnswers and campaign data
+        lead.formAnswers = parsed.formAnswers.length > 0 ? parsed.formAnswers : lead.formAnswers;
+        lead.metaCampaignName = parsed.metaCampaignName || lead.metaCampaignName;
+        lead.metaAdName = parsed.metaAdName || lead.metaAdName;
+        if (!lead.metaLeadId && leadIdStr) {
+          lead.metaLeadId = leadIdStr;
+        }
+        await lead.save();
+        existingUpdated += 1;
+      }
+    } catch (singleLeadErr) {
+      console.error('[MetaSync] Error syncing individual lead:', singleLeadErr.message);
     }
   }
 

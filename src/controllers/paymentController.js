@@ -5,11 +5,34 @@ const { BOOKING_STATUSES, AUDIT_ACTIONS } = require('../constants/statuses');
 const { logAudit } = require('../services/auditService');
 
 // Helper to generate payment reference
+// Helper to generate collision-proof payment reference
 const generatePaymentReference = async (organizationId) => {
-  const count = await Payment.countDocuments({ organizationId });
   const year = new Date().getFullYear();
-  const sequence = String(count + 1).padStart(4, '0');
-  return `EF-PAY-${year}-${sequence}`;
+  const prefix = `EF-PAY-${year}-`;
+  const latest = await Payment.findOne({
+    organizationId,
+    paymentReference: new RegExp(`^${prefix}\\d+$`),
+  })
+    .sort({ paymentReference: -1 })
+    .select('paymentReference')
+    .lean();
+
+  let nextSeq = 1;
+  if (latest && latest.paymentReference) {
+    const parts = latest.paymentReference.split('-');
+    const currentSeq = parseInt(parts[parts.length - 1], 10);
+    if (!isNaN(currentSeq)) {
+      nextSeq = currentSeq + 1;
+    }
+  }
+
+  let candidate = `${prefix}${String(nextSeq).padStart(4, '0')}`;
+  while (await Payment.exists({ organizationId, paymentReference: candidate })) {
+    nextSeq += 1;
+    candidate = `${prefix}${String(nextSeq).padStart(4, '0')}`;
+  }
+
+  return candidate;
 };
 
 // 1. Get all payments

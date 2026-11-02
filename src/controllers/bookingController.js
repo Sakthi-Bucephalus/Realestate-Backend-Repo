@@ -3,15 +3,37 @@ const Property = require('../models/Property');
 const Customer = require('../models/Customer');
 const Payment = require('../models/Payment');
 const { BOOKING_STATUSES, PROPERTY_AVAILABILITY, AUDIT_ACTIONS } = require('../constants/statuses');
-const { ROLES } = require('../constants/roles');
+const { ROLES, isManagingDirectorRole } = require('../constants/roles');
 const { logAudit } = require('../services/auditService');
 
-// Helper to generate booking reference
+// Helper to generate collision-proof booking reference
 const generateBookingReference = async (organizationId) => {
-  const count = await Booking.countDocuments({ organizationId });
   const year = new Date().getFullYear();
-  const sequence = String(count + 1).padStart(4, '0');
-  return `EF-BK-${year}-${sequence}`;
+  const prefix = `EF-BK-${year}-`;
+  const latest = await Booking.findOne({
+    organizationId,
+    bookingReference: new RegExp(`^${prefix}\\d+$`),
+  })
+    .sort({ bookingReference: -1 })
+    .select('bookingReference')
+    .lean();
+
+  let nextSeq = 1;
+  if (latest && latest.bookingReference) {
+    const parts = latest.bookingReference.split('-');
+    const currentSeq = parseInt(parts[parts.length - 1], 10);
+    if (!isNaN(currentSeq)) {
+      nextSeq = currentSeq + 1;
+    }
+  }
+
+  let candidate = `${prefix}${String(nextSeq).padStart(4, '0')}`;
+  while (await Booking.exists({ organizationId, bookingReference: candidate })) {
+    nextSeq += 1;
+    candidate = `${prefix}${String(nextSeq).padStart(4, '0')}`;
+  }
+
+  return candidate;
 };
 
 // 1. Get all bookings
@@ -31,8 +53,12 @@ const getBookings = async (req, res, next) => {
 
     const query = { organizationId: req.organizationId };
 
-    if (req.user.role === ROLES.EMPLOYEE) {
-      query.assignedTo = req.user._id;
+    if (!isManagingDirectorRole(req.user.role)) {
+      if ([ROLES.EMPLOYEE, ROLES.MEDIATOR, ROLES.REFERRALS].includes(req.user.role)) {
+        query.assignedTo = req.user._id;
+      } else if (assignedTo) {
+        query.assignedTo = assignedTo;
+      }
     } else if (assignedTo) {
       query.assignedTo = assignedTo;
     }
