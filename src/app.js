@@ -33,23 +33,34 @@ app.use(helmet({
 
 //// Local URL
 
-app.use(cors({
-  origin: true,
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-}));
-
-///Local URL
-
-///Live URL
-
 // app.use(cors({
-//   origin: 'http://rsv-realestate.s3-website-ap-southeast-2.amazonaws.com',
+//   origin: true,
 //   credentials: true,
 //   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
 //   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
 // }));
+
+
+// app.use(cors({
+//   origin: [
+//     'http://localhost:5173',
+//     'http://localhost:3000',
+//   ],
+//   credentials: true,
+//   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+//   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+// }));
+///Local URL
+
+///Live URL
+app.use(cors({
+  origin: [
+    'https://levoralead.in',
+    'https://www.levoralead.in',  ],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+}));
 
 
 ///Live URL
