@@ -5,6 +5,7 @@ const { requireAuth } = require('../middleware/auth');
 
 // Public endpoints
 router.get('/check-setup', authController.checkSetup);
+router.post('/register', authController.register);
 
 // Initial MD Registration with Email OTP
 router.post('/register-md', authController.registerInitialMD);

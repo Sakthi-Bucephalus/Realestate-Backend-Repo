@@ -35,6 +35,149 @@ const checkSetup = async (req, res, next) => {
 };
 
 /**
+ * Public User Registration:
+ * When a new user registers, the system automatically assigns the Owner role.
+ * Form contains only: Name, Email, Password, Confirm Password.
+ * The registered user's details are used dynamically throughout their profile and dashboard.
+ * Profile name comes from registered user's actual data (not hardcoded as "Owner").
+ * Each newly registered user has their own independent Owner account and Organization data.
+ */
+const register = async (req, res, next) => {
+  try {
+    const { name, email, password, confirmPassword } = req.body;
+
+    if (!name || !email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Name, email, and password are required.',
+      });
+    }
+
+    if (confirmPassword && password !== confirmPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'Passwords do not match.',
+      });
+    }
+
+    const emailClean = email.toLowerCase().trim();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(emailClean)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide a valid email address.',
+      });
+    }
+
+    if (password.length < 8) {
+      return res.status(400).json({
+        success: false,
+        message: 'Password must be at least 8 characters long.',
+      });
+    }
+
+    // Check if an account already exists with this email
+    const existingUser = await User.findOne({ email: emailClean });
+    if (existingUser) {
+      return res.status(400).json({
+        success: false,
+        message: 'An account with this email address already exists. Please sign in.',
+      });
+    }
+
+    // Parse registered name into firstName and lastName
+    const trimmedName = name.trim();
+    const nameParts = trimmedName.split(/\s+/);
+    const firstName = nameParts[0] || trimmedName;
+    const lastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : '';
+
+    // Create an independent tenant Organization for this new Owner
+    const orgName = `${trimmedName}'s Real Estate`;
+    const org = await Organization.create({
+      name: orgName,
+      legalName: orgName,
+      email: emailClean,
+      enabledModules: MODULE_LIST,
+      isActive: true,
+    });
+
+    // Create user with automatically assigned Owner role and actual registered name
+    const user = await User.create({
+      organizationId: org._id,
+      firstName,
+      lastName,
+      email: emailClean,
+      password,
+      role: ROLES.OWNER,
+      department: 'Management',
+      designation: 'Owner',
+      employeeId: `OWNER-${Date.now().toString().slice(-4)}`,
+      isEmailVerified: true,
+      isActive: true,
+      accountStatus: ACCOUNT_STATUSES.ACTIVE,
+    });
+
+    // Initialize default permissions for all roles for this independent organization
+    for (const [roleName, config] of Object.entries(DEFAULT_ROLE_PERMISSIONS)) {
+      await RolePermission.create({
+        organizationId: org._id,
+        role: roleName,
+        allowedModules: config.modules,
+        allowedPermissions: config.permissions,
+        updatedBy: user._id,
+      });
+    }
+
+    await logAudit({
+      organizationId: org._id,
+      action: AUDIT_ACTIONS.USER_CREATED,
+      performedBy: user._id,
+      performedByName: `${user.firstName} ${user.lastName}`.trim(),
+      entityType: 'User',
+      entityId: user._id,
+      details: { role: ROLES.OWNER, message: 'New Owner account registered' },
+      req,
+    });
+
+    const token = signToken({
+      userId: user._id,
+      organizationId: org._id,
+      role: user.role,
+      tokenVersion: user.tokenVersion,
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: 'Account successfully registered as Owner! You can now log in.',
+      token,
+      user: {
+        id: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        fullName: `${user.firstName} ${user.lastName}`.trim(),
+        email: user.email,
+        phone: user.phone || '',
+        role: user.role,
+        department: user.department,
+        designation: user.designation,
+        employeeId: user.employeeId,
+        avatar: user.avatar || '',
+        accountStatus: user.accountStatus,
+        organizationId: org._id,
+        organizationName: org.name,
+        currency: org.currency || { code: 'INR', symbol: '₹' },
+        timezone: org.timezone || 'Asia/Kolkata',
+        enabledModules: MODULE_LIST,
+        allowedModules: MODULE_LIST,
+        allowedPermissions: DEFAULT_ROLE_PERMISSIONS[ROLES.OWNER]?.permissions || DEFAULT_ROLE_PERMISSIONS[ROLES.MANAGING_DIRECTOR].permissions,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
  * Step 1 of Initial MD Registration:
  * Collects details, validates inputs, generates secure time-limited email OTP,
  * and sends it via email. Atomic lock prevents duplicate or concurrent MD registration.
@@ -946,6 +1089,7 @@ const seedDemoData = async (req, res, next) => {
 };
 
 module.exports = {
+  register,
   checkSetup,
   registerInitialMD,
   verifyInitialMDOtp,
